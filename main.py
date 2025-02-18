@@ -52,28 +52,50 @@ if __name__ == "__main__":
         print(ff_keys)
             
     # Task 1.2: Fetch meetings from Fireflies
-    meeting = ""
-    
+    try:
+        fireflies_integrations = json.loads(ff_keys)
+    except Exception as e:
+        print("Error decoding fireflies API keys:", e)
+        fireflies_integrations = []
+
+    meeting = None
+    if fireflies_integrations:
+        # Use the first available API key from integrations to fetch new meetings from Fireflies
+        api_key = fireflies_integrations[0].get("api_key")
+        if api_key:
+            query = "query Transcripts { transcripts { id title summary { keywords action_items overview } } }"
+            data = {"query": query}
+            result = request_fireflies(api_key, data)
+            meetings = result.get("data", {}).get("transcripts", [])
+            # print("Fetched meeting from Fireflies:", meetings)
+        else:
+            print("Fireflies integration entry missing 'api_key'.")
+    else:
+        print("No fireflies integrations available.")
+
     # Task 2: Provide a relation checker between `integrations` and `goals`
     OPENAI_API_KEY = getenv("OPENAI_API_KEY")
     llm = OpenAI(api_key=OPENAI_API_KEY, temperature=0)
-    prompt = PromptTemplate(
-        input_variables=["goals", "meeting"],
-        template="Determine if these goals: '{goals}' and the meeting summary: '{meeting}' are relevant to each other. Reply with 'Yes' or 'No'."
-    )
-    chain = prompt | llm
-    response = chain.invoke({
-        "goals": goals,
-        "meeting": meeting
-    })
-    is_related = response.lower()
+    for meeting in meetings:
+        prompt = PromptTemplate(
+            input_variables=["goals", "meeting"],
+            template="Act as an intelligent transcript analyzer, Given the following transcript data and goal information, please determine if the transcript is highly related to the goal. Base your evaluation on the evidence provided in the transcript fields. The goal data is {goals} and the transcript data is {meeting}. Answer with a 'yes' or 'no' and add a short explanation." 
+        )
+        chain = prompt | llm
+        response = chain.invoke({
+            "goals": goals,
+            "meeting": meeting
+        })
+        is_related = response.lower().strip()
 
-    # Task 3: Store meeting as "PENDING" to `meetings`
-    pass
+        print(is_related, meeting.get("title"))
 
-    # Task 4 & 5: Run as parallel tasks
-    # Task 4: Store meeting as "COMPLETED" to `meetings`
-    pass
+        # Task 3: Store meeting as "PENDING" to `meetings`
+        pass
 
-    # Task 5: Ingest goals and meeting then send as notification summary
-    pass
+        # Task 4 & 5: Run as parallel tasks
+        # Task 4: Store meeting as "COMPLETED" to `meetings`
+        pass
+
+        # Task 5: Ingest goals and meeting then send as notification summary
+        pass
