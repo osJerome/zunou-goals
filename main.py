@@ -13,27 +13,27 @@ load_dotenv()
 
 
 if __name__ == "__main__":
-    # Task 1.1: Fetch Fireflies API key from `integrations` and goals from `goals` by `pulse_id`
+    # Task 1.1: Fetch Fireflies API key from `integrations` and strategies from `strategies` by `pulse_id`
     DB_HOST = getenv("DB_HOST")
     DB_NAME = getenv("DB_NAME")
     DB_USER = getenv("DB_USER")
     DB_PASSWORD = getenv("DB_PASSWORD")
 
-    # Goals
-    goals_query = """
+    # strategies
+    strategies_query= """
         SELECT
-            name, pulse_id, organization_id, description
+            name, description
         FROM
-            goals
+            strategies
         WHERE
             type = 'objectives';
     """
     
     conn = create_connection(DB_HOST, DB_NAME, DB_USER, DB_PASSWORD)
     with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute(goals_query)
-        goals = json.dumps(cursor.fetchall())
-        print(goals)
+        cursor.execute(strategies_query)
+        strategies = json.dumps(cursor.fetchall())
+        print(strategies)
     
     # Fireflies API Keys
     integrations_query = """
@@ -58,33 +58,69 @@ if __name__ == "__main__":
         print("Error decoding fireflies API keys:", e)
         fireflies_integrations = []
 
-    meeting = None
-    if fireflies_integrations:
-        # Use the first available API key from integrations to fetch new meetings from Fireflies
-        api_key = fireflies_integrations[0].get("api_key")
-        if api_key:
-            query = "query Transcripts { transcripts { id title summary { keywords action_items overview } } }"
-            data = {"query": query}
-            result = request_fireflies(api_key, data)
-            meetings = result.get("data", {}).get("transcripts", [])
-            # print("Fetched meeting from Fireflies:", meetings)
-        else:
-            print("Fireflies integration entry missing 'api_key'.")
-    else:
-        print("No fireflies integrations available.")
+    meetings = None
+    cache_file = "fireflies_meetings_cache.txt"
 
-    # Task 2: Provide a relation checker between `integrations` and `goals`
+    # Try to load from cache first
+    try:
+        with open(cache_file, 'r') as f:
+            meetings = json.loads(f.read())
+            print("Using cached meetings data")
+    except (FileNotFoundError, json.JSONDecodeError):
+        # If cache doesn't exist or is invalid, fetch from API
+        if fireflies_integrations:
+            api_key = fireflies_integrations[0].get("api_key")
+            if api_key:
+                query = "query Transcripts { transcripts { title summary { keywords short_summary } } }"
+                data = {"query": query}
+                result = request_fireflies(api_key, data)
+                meetings = result.get("data", {}).get("transcripts", [])
+                
+                # Store the fetched data in cache
+                try:
+                    with open(cache_file, 'w') as f:
+                        json.dump(meetings, f)
+                    print("Stored meetings data in cache")
+                except Exception as e:
+                    print(f"Error storing cache: {e}")
+                
+                print("Fetched meeting from Fireflies:", meetings)
+            else:
+                print("Fireflies integration entry missing 'api_key'.")
+        else:
+            print("No fireflies integrations available.")
+
+    # Task 2: Provide a relation checker between `integrations` and `strategies`
     OPENAI_API_KEY = getenv("OPENAI_API_KEY")
     llm = OpenAI(api_key=OPENAI_API_KEY, temperature=0)
     for meeting in meetings:
-        prompt = PromptTemplate(
-            input_variables=["goals", "meeting"],
-            template="Act as an intelligent transcript analyzer, Given the following transcript data and goal information, please determine if the transcript is highly related to the goal. Base your evaluation on the evidence provided in the transcript fields. The goal data is {goals} and the transcript data is {meeting}. Answer with a 'yes' or 'no' and add a short explanation." 
-        )
+        meeting_title = meeting.get("title")
+        # if there is no summary, proceed to the next meeting
+        if not meeting.get("summary"):
+            continue
+        meeting_short_summary = meeting.get("summary", {}).get("short_summary")
+
+        prompt = PromptTemplate(input_variables=["strategies", "title", "short_summary"], template='''
+            Meetings tend to be unrelated to the strategies listed. Based on the information below, determine if the meeting is irrelevant to the strategies.
+            Strategies:
+            {strategies}
+
+            Meeting Title:
+            {title}
+                            
+            Meeting Short Summary:
+            {short_summary}
+
+            If uncertain default to 'No'.
+            If the meeting title contains words that are in strategies, default to 'Yes'.
+            If there is any doubt about the relevance of the meeting to the strategy, respond with 'No'.
+            Is the meeting relevant to the strategy? Reply with 'Yes' or 'No'.
+        ''')
         chain = prompt | llm
         response = chain.invoke({
-            "goals": goals,
-            "meeting": meeting
+            "strategies": strategies,
+            "title": meeting_title,
+            "short_summary": meeting_short_summary
         })
         is_related = response.lower().strip()
 
@@ -97,5 +133,5 @@ if __name__ == "__main__":
         # Task 4: Store meeting as "COMPLETED" to `meetings`
         pass
 
-        # Task 5: Ingest goals and meeting then send as notification summary
+        # Task 5: Ingest strategies and meeting then send as notification summary
         pass
